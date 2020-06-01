@@ -20,14 +20,7 @@ In addition, the `MutatingAdmissionWebhook` and `ValidatingAdmissionWebhook` adm
 
 ## Build
 
-1. Setup dep
-
-   The repo uses [dep](https://github.com/golang/dep) as the dependency management tool for its Go codebase. Install `dep` by the following command:
-```
-go get -u github.com/golang/dep/cmd/dep
-```
-
-2. Build and push docker image
+Build and push docker image
    
 ```
 ./build
@@ -35,4 +28,5 @@ go get -u github.com/golang/dep/cmd/dep
 
 ## How does it work?
 
-We have a blog post that explains webhooks in depth with the help of this example. Check [it](https://banzaicloud.com/blog/k8s-admission-webhooks/) out!
+We have a blog post that explains webhooks in depth with the help of this example. Check [it](https://www.qikqiak.com/post/k8s-admission-webhook/) out!
+
