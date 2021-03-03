@@ -17,7 +17,7 @@ spec:
       serviceAccount: admission-webhook-example-sa
       containers:
         - name: admission-webhook-example
-          image: cnych/admission-webhook-example:v1
+          image: ccr.ccs.tencentyun.com/keyangxie/admission-webhook-example
           imagePullPolicy: Always
           args:
             - -tlsCertFile=/etc/webhook/certs/cert.pem
@@ -33,3 +33,17 @@ spec:
         - name: webhook-certs
           secret:
             secretName: admission-webhook-example-certs
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admission-webhook-example-svc
+  labels:
+    app: admission-webhook-example
+spec:
+  ports:
+  - port: 443
+    targetPort: 443
+  selector:
+    app: admission-webhook-example

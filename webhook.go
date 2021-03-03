@@ -40,13 +40,15 @@ var (
 		partOfLabel,
 		managedByLabel,
 	}
-	addLabels = map[string]string{
-		nameLabel:      NA,
-		instanceLabel:  NA,
-		versionLabel:   NA,
-		componentLabel: NA,
-		partOfLabel:    NA,
-		managedByLabel: NA,
+	addLabels = map[string]string{}
+
+	podLabels = map[string]string{
+		nameLabel: "my_pod_label",
+		// instanceLabel:  NA,
+		// versionLabel:   NA,
+		// componentLabel: NA,
+		// partOfLabel:    NA,
+		// managedByLabel: NA,
 	}
 )
 
@@ -286,6 +288,101 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 		}
 		resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
 		availableLabels = service.Labels
+
+	case "Pod":
+		var pod corev1.Pod
+		if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
+			glog.Errorf("Could not unmarshal raw object: %v\n", err)
+		}
+		glog.Infof("pod ns(%s), name(%s)", pod.Namespace, pod.Name)
+		glog.Infof("container spec: %+v\n", pod.Spec.Containers)
+
+		var patch []patchOperation
+
+		for i, container := range pod.Spec.Containers {
+			// /resources/limits/tencent.com/vcuda-core
+			vcore_limit, ok := container.Resources.Limits["tencent.com/vcuda-core"]
+			if ok {
+				val_vcore_limit, ok := vcore_limit.AsInt64()
+				if ok {
+					glog.Infof("add gpu-percent limit value(%d) for container(%s)", int(val_vcore_limit), container.Name)
+					patch = append(patch, patchOperation{
+						Op:    "add",
+						Path:  fmt.Sprintf("/spec/containers/%d/resources/limits/tencent.com~1gpu-percent", i),
+						Value: int(val_vcore_limit),
+					})
+				} else {
+					glog.Infof("container(%s) can't parse vcore-limit", container.Name)
+				}
+				glog.Infof("container(%s) delete limit vcore: %+v", container.Name, vcore_limit)
+				patch = append(patch, patchOperation{
+					Op:   "remove",
+					Path: fmt.Sprintf("/spec/containers/%d/resources/limits/tencent.com~1vcuda-core", i),
+				})
+			}
+
+			// /resources/requests/tencent.com/vcuda-core
+			vcore_req, ok := container.Resources.Requests["tencent.com/vcuda-core"]
+			if ok {
+				val_vcore_request, ok := vcore_req.AsInt64()
+				if ok {
+					glog.Infof("add gpu-percent request value(%d) for container(%s)", int(val_vcore_request), container.Name)
+					patch = append(patch, patchOperation{
+						Op:    "add",
+						Path:  fmt.Sprintf("/spec/containers/%d/resources/requests/tencent.com~1gpu-percent", i),
+						Value: int(val_vcore_request),
+					})
+				} else {
+					glog.Infof("container(%s) can't parse vcore-request", container.Name)
+				}
+				glog.Infof("container(%s) delete request vcore: %+v", container.Name, vcore_req)
+				patch = append(patch, patchOperation{
+					Op:   "remove",
+					Path: fmt.Sprintf("/spec/containers/%d/resources/requests/tencent.com~1vcuda-core", i),
+				})
+			}
+
+			// /resources/limits/tencent.com/vcuda-memory
+			vmemory_limit, ok := container.Resources.Limits["tencent.com/vcuda-memory"]
+			if ok {
+				glog.Infof("container(%s) delete limit vmemory: %+v", container.Name, vmemory_limit)
+				patch = append(patch, patchOperation{
+					Op:   "remove",
+					Path: fmt.Sprintf("/spec/containers/%d/resources/limits/tencent.com~1vcuda-memory", i),
+				})
+			}
+
+			// /resources/requests/tencent.com/vcuda-memory
+			vmemory_req, ok := container.Resources.Requests["tencent.com/vcuda-memory"]
+			if ok {
+				glog.Infof("container(%s) delete request vmemory: %+v", container.Name, vmemory_req)
+				patch = append(patch, patchOperation{
+					Op:   "remove",
+					Path: fmt.Sprintf("/spec/containers/%d/resources/requests/tencent.com~1vcuda-memory", i),
+				})
+			}
+
+			// patch = append(patch, createResourcesPatch(&container, i, int(val_vcore_limit), int(val_vcore_request))...)
+		}
+
+		glog.Infof("patch length: %d\n", len(patch))
+		data, err := json.Marshal(patch)
+		if err != nil {
+			glog.Infof("Can't encode patch(%v): %v\n", patch, err)
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+		return &v1beta1.AdmissionResponse{
+			Allowed: true,
+			Patch:   data,
+			PatchType: func() *v1beta1.PatchType {
+				pt := v1beta1.PatchTypeJSONPatch
+				return &pt
+			}(),
+		}
 	}
 
 	if !mutationRequired(ignoredNamespaces, objectMeta) {
@@ -374,4 +471,46 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		glog.Errorf("Can't write response: %v", err)
 		http.Error(w, fmt.Sprintf("could not write response: %v", err), http.StatusInternalServerError)
 	}
+}
+
+// if `resources` is absent, must create `resources`、`resources/requests`、`resources/limits` at the beginning
+func createResourcesPatch(container *corev1.Container, i int, val_vcore_limit, val_vcore_request int) []patchOperation {
+	var patch []patchOperation
+	glog.Infof("create resource patch for container(%s), vcore-limit(%d), vcore-request(%d)", container.Name, val_vcore_limit, val_vcore_request)
+
+	// if container.Resources.Limits == nil && container.Resources.Requests == nil {
+	glog.Infof("should add path for container(%s)", container.Name)
+	patch = append(patch, patchOperation{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources", i),
+		Value: corev1.ResourceRequirements{},
+	})
+
+	patch = append(patch, patchOperation{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/requests", i),
+		Value: corev1.ResourceList{},
+	})
+
+	patch = append(patch, patchOperation{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/limits", i),
+		Value: corev1.ResourceList{},
+	})
+
+	// }
+
+	patch = append(patch, patchOperation{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/limits/tencent.com~1gpu-percent", i),
+		Value: val_vcore_limit,
+	})
+
+	patch = append(patch, patchOperation{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/requests/tencent.com~1gpu-percent", i),
+		Value: val_vcore_request,
+	})
+
+	return patch
 }
